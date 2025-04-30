@@ -529,17 +529,17 @@ def clean(text: str) -> str:
     # Remove line breaks
     text = text.replace("\n", "")
 
-    # Parser hooks
-    # <ref name="CFC"/> → ''
-    text = sub(r"<ref[^>]*/>", "", text)
-    # <ref>foo → ''
-    # <ref>foo</ref> → ''
-    # <ref name="CFC">{{Import:CFC}}</ref> → ''
-    # <ref name="CFC"><tag>...</tag></ref> → ''
-    text = sub(r"<ref[^>]*/?>[\s\S]*?(?:</ref>|$)", "", text)
-    # <ref> → ''
-    # </ref> → ''
-    text = text.replace("<ref>", "").replace("</ref>", "")
+    # # Parser hooks
+    # # <ref name="CFC"/> → ''
+    # text = sub(r"<ref[^>]*/>", "", text)
+    # # <ref>foo → ''
+    # # <ref>foo</ref> → ''
+    # # <ref name="CFC">{{Import:CFC}}</ref> → ''
+    # # <ref name="CFC"><tag>...</tag></ref> → ''
+    # text = sub(r"<ref[^>]*/?>[\s\S]*?(?:</ref>|$)", "", text)
+    # # <ref> → ''
+    # # </ref> → ''
+    # text = text.replace("<ref>", "").replace("</ref>", "")
 
     # HTML
     # Source: https://github.com/5j9/wikitextparser/blob/b24033b/wikitextparser/_wikitext.py#L83
@@ -683,6 +683,12 @@ def process_templates(
 
     code = wikicode
 
+    code = code.replace("(whence also {{m|la|bibō}}).</br>", "(whence also {{m|la|bibō}}).") # poculum
+    code = code.replace("{{bor|la|grc|λυρικός||of or pertaining to the lyre}}.</br>", "{{bor|la|grc|λυρικός||of or pertaining to the lyre}}.") # lyricus
+
+    code = code.replace("{{given name|la|female<l:9th C.>|from=Frankish}}", "{{given name|la|female&lt;l:9th C.&gt;|from=Frankish}}") # Ingeida
+    code = code.replace("<qu>", "&lt;qu&gt;") # apis
+
     code = code.replace("Li-Qiang Sun</sup>", "Li-Qiang Sun") # asunaprevir
     code = code.replace("<span lang=\"en-Dsrt-US\">𐑅𐐯𐑂𐐮𐑌<span>", "<span lang=\"en-Dsrt-US\">𐑅𐐯𐑂𐐮𐑌</span>") # Deseret
     code = code.replace("Certain [[snails]], [[slug]]s, and [[sea hare]]s}}", "Certain [[snails]], [[slug]]s, and [[sea hare]]s") # Tectipleura
@@ -762,8 +768,8 @@ def process_templates(
         text = callback(code) or ""
         # Handle all templates
         text = apply_template(text)
-    except ValueError as err:
-        print(f"Error processing templates in {word!r}: {err}")
+    except ValueError as e:
+        print(f"syntax error applying template:\n{e}\nword: {word}\ncode: {wikicode}")
 
     for tpl in SPECIAL_TEMPLATES.values():
         text = text.replace(tpl.placeholder, tpl.value)
@@ -793,7 +799,7 @@ def process_templates(
             etree.fromstring(f"<div>{definition}</div>")
             return True
         except etree.XMLSyntaxError as e:
-            print(f"syntax error:\n{e}\nword: {word}\ndefinition: {definition}\ncode: {wikicode}")
+            print(f"syntax error checking xhtml:\n{e}\nword: {word}\ndefinition: {definition}\ncode: {wikicode}")
             return False
 
     is_well_formed_xhtml(word, text, wikicode)

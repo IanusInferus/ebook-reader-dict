@@ -27,5 +27,8 @@ python3.13 -m wikidict en --convert
 <dc:Title>Wiktionary BoboTiG-Ianus en:en A</dc:Title>
 <dc:Title>Wiktionary BoboTiG-Ianus en:en B</dc:Title>
 
+<dc:Title>Wiktionary BoboTiG-Ianus la:en</dc:Title>
+<DictionaryInLanguage>la</DictionaryInLanguage>
+
 wsl -d Ubuntu-20.04 ../kindlegen data/en/en/output/mobi/dict-data.mobi/OEBPS/content.opf -gen_ff_mobi7 -dont_append_source -verbose
 wsl -d Ubuntu-20.04 ../kindlegen data/en/en/output2/mobi/dict-data.mobi/OEBPS/content.opf -gen_ff_mobi7 -dont_append_source -verbose

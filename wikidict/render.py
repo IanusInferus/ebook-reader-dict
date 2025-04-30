@@ -537,6 +537,7 @@ def render_word(
     try:
         code = regex.sub(r"<ref [^/>]*?/>|<ref[ >](.|\r|\n)*?</ref>", "", code, flags=re.IGNORECASE)
         code = regex.sub(r"<gallery [^/>]*?/>|<gallery[ >](.|\r|\n)*?</gallery>", "", code, flags=re.IGNORECASE)
+        code = code.replace("{{inflection of|la|ēgestiō<t:an emptying>||nom//acc//voc|p}}", "{{inflection of|la|ēgestiō||nom//acc//voc|p}}<t:an emptying>") # egestiones
         details = parse_word(word, code, locale, all_templates=all_templates)
     except KeyboardInterrupt:
         pass

@@ -779,16 +779,6 @@ def main(locale: str) -> int:
         supplementary_words = {}
         log.info("Total words: %s", f"{total_count}")
 
-    # And run formatters, distributing the workload
-    output_dir = source_dir / "output"
-    output_dir.mkdir(exist_ok=True, parents=True)
-    # args = (output_dir, input_file, locale, words, variants)
-    args = (output_dir, input_file, locale, normal_words, {})
-
-    output2_dir = source_dir / "output2"
-    output2_dir.mkdir(exist_ok=True, parents=True)
-    args2 = (output2_dir, input_file, locale, supplementary_words, {})
-
     # Force not using `fork()` on GNU/Linux to prevent deadlocks on "slow" machines (see issue #2333)
     multiprocessing.set_start_method("spawn", force=True)
 
@@ -797,11 +787,21 @@ def main(locale: str) -> int:
         # distribute_workload(get_primary_formatters(), *args, include_etymology=include_etymology)
         # distribute_workload(get_secondary_formatters(), *args, include_etymology=include_etymology)
         try:
+            # And run formatters, distributing the workload
+            output_dir = source_dir / "output"
+            output_dir.mkdir(exist_ok=True, parents=True)
+            # args = (output_dir, input_file, locale, words, variants)
+            args = (output_dir, input_file, locale, normal_words, {})
+
             run_mobi_formatter(*args, include_etymology=include_etymology)
         except Exception as ex:
             log.exception("Error with the Mobi conversion: %s", ex)
         if len(supplementary_words) > 0:
             try:
+                output2_dir = source_dir / "output2"
+                output2_dir.mkdir(exist_ok=True, parents=True)
+                args2 = (output2_dir, input_file, locale, supplementary_words, {})
+
                 run_mobi_formatter(*args2, include_etymology=include_etymology)
             except Exception as ex:
                 log.exception("Error with the Mobi conversion: %s", ex)

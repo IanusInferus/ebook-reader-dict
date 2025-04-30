@@ -12,9 +12,9 @@ float_separator = "."
 thousands_separator = ","
 
 # Markers for sections that contain interesting text to analyse.
-head_sections = ("english", "translingual")
+head_sections = ("latin")
 section_sublevels = (4, 3)
-etyl_section = ("etymology", "etymology 1")
+etyl_section = ("etymology", "etymology 1", "etymology 2", "etymology 3", "etymology 4", "etymology 5")
 sections = (
     *etyl_section,
     "adjective",
@@ -40,6 +40,7 @@ sections = (
 variant_titles = (
     "noun",
     "verb",
+    "adjective",
 )
 variant_templates = (
     "{{en-ing",
@@ -52,6 +53,7 @@ variant_templates = (
     "{{en-tpso",
     "{{infl of",
     "{{plural of",
+    "{{inflection of",
 )
 
 # Some definitions are not good to keep (plural, gender, ... )
@@ -355,6 +357,9 @@ def last_template_handler(
 
     tpl, *parts = template
     data = extract_keywords_from(parts)
+
+    if tpl == "inflection of":
+        return data["2"] or parts[1]
 
     if tpl == "infl of":
         return data["2"] or parts[1]
