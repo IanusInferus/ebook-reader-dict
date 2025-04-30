@@ -10,6 +10,7 @@ import json
 import logging
 import multiprocessing
 import shutil
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 from functools import partial
@@ -405,7 +406,8 @@ class DictFileFormat(BaseFormat):
 
     @staticmethod
     def render_word(template: Template, **kwargs: Any) -> str:
-        return template.render(**kwargs) + "\n\n"
+        result = template.render(**kwargs) + "\n\n"
+        return result
 
 
 class DictFileFormatForMobi(DictFileFormat):
@@ -533,6 +535,7 @@ class MobiFormat(ConverterFromDictFile):
         "cover_path": str(constants.COVER_FILE),
         "keep": True,
         "kindlegen_path": str(constants.KINDLEGEN_FILE),
+        # "file_size_approx": 131072
     }
 
     def get_glossary_lang_dst(self) -> str:
@@ -637,7 +640,7 @@ def run_mobi_formatter(
             len(stats),
         )
         words = new_words
-        variants = make_variants(words)
+        words, variants = make_words_variants(words)
     else:
         log.info(
             "[Mobi] Untouched words for .mobi (total words count is %s, unique characters count is %d)",
@@ -694,6 +697,37 @@ def make_variants(words: Words) -> Variants:
     return variants
 
 
+def make_words_variants(words: Words) -> tuple[Words, Variants]:
+    log.info("Creating word and variants ...")
+
+    new_words: Words = {}
+    variants: Variants = defaultdict(list)
+    for word, details in words.items():
+        new_words[word] = details
+        for variant in details.variants:
+            if variant in words:
+                variant_details = words[variant]
+                if len(variant_details.definitions) > 0 and len(details.definitions) == 0:
+                    new_words[word] = Word(
+                        pronunciations = [variant] + (variant_details.pronunciations or []),
+                        genders = variant_details.genders,
+                        etymology = variant_details.etymology,
+                        definitions = variant_details.definitions,
+                        variants = [],
+                    )
+                elif len(details.definitions) > 0 and len(variant_details.definitions) == 0:
+                    new_words[variant] = Word(
+                        pronunciations = [word] + (details.pronunciations or []),
+                        genders = details.genders,
+                        etymology = details.etymology,
+                        definitions = details.definitions,
+                        variants = [],
+                    )
+
+    # log.info("Created %s variants", f"{len(variants):,}")
+    return new_words, variants
+
+
 def distribute_workload(
     formatters: list[type[BaseFormat]],
     output_dir: Path,
@@ -738,21 +772,48 @@ def main(locale: str) -> int:
 
     # Get all words from the database
     words: Words = load(input_file)
-    variants: Variants = make_variants(words)
+    variants: Variants
+    words, variants = make_words_variants(words)
+
+    total_count = len(words)
+    if total_count > 800000:
+        # We need to split the dictionary into two parts as otherwise kindlegen will throw
+        #   Error(index build):E25002: : single entry exceeds record size (max=64k): aborting index build.
+        rNormalWord = re.compile(r"^[a-z]+$")
+        normal_words = {word: words[word] for word in words if rNormalWord.match(word)}
+        supplementary_words = {word: words[word] for word in words if not rNormalWord.match(word)}
+        log.info("Total words: %s, normal words: %s, supplementary words: %s", f"{total_count}", f"{len(normal_words)}", f"{len(supplementary_words)}")
+    else:
+        normal_words = words
+        supplementary_words = {}
+        log.info("Total words: %s", f"{total_count}")
 
     # And run formatters, distributing the workload
     output_dir = source_dir / "output"
     output_dir.mkdir(exist_ok=True, parents=True)
-    args = (output_dir, input_file, locale, words, variants)
+    # args = (output_dir, input_file, locale, words, variants)
+    args = (output_dir, input_file, locale, normal_words, {})
+
+    output2_dir = source_dir / "output2"
+    output2_dir.mkdir(exist_ok=True, parents=True)
+    args2 = (output2_dir, input_file, locale, supplementary_words, {})
 
     # Force not using `fork()` on GNU/Linux to prevent deadlocks on "slow" machines (see issue #2333)
     multiprocessing.set_start_method("spawn", force=True)
 
     start = monotonic()
-    for include_etymology in [False, True]:
-        distribute_workload(get_primary_formatters(), *args, include_etymology=include_etymology)
-        distribute_workload(get_secondary_formatters(), *args, include_etymology=include_etymology)
-        run_mobi_formatter(*args, include_etymology=include_etymology)
+    for include_etymology in [True]: # [False, True]:
+        # distribute_workload(get_primary_formatters(), *args, include_etymology=include_etymology)
+        # distribute_workload(get_secondary_formatters(), *args, include_etymology=include_etymology)
+        try:
+            run_mobi_formatter(*args, include_etymology=include_etymology)
+        except Exception as ex:
+            log.exception("Error with the Mobi conversion: %s", ex)
+        if len(supplementary_words) > 0:
+            try:
+                run_mobi_formatter(*args2, include_etymology=include_etymology)
+            except Exception as ex:
+                log.exception("Error with the Mobi conversion: %s", ex)
 
     log.info("Convert done in %s!", timedelta(seconds=monotonic() - start))
     return 0

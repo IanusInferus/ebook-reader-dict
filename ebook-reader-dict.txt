@@ -1,0 +1,32 @@
+patch def getDataDir() in C:\Users\<User>\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pyglossary\core.py, add 
+	direc = join(parent3, "local-packages", "share", "pyglossary")
+	if isdir(direc):
+		return direc
+
+patch def wordTitleStr in C:\Users\<User>\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pyglossary\glossary_v2.py
+		html_word = word.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
+		if class_:
+			return f'<{tag} class="{class_}">{html_word}</{tag}>'
+		return f"<{tag}>{html_word}</{tag}>"
+
+patch class Writer(EbookWriter) in C:\Users\<User>\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pyglossary\plugins\ebook_mobi\writer.py
+
+</idx:orth>
+{definition}
+</idx:entry>
+
+patch _file_size_approx: int = 271360 in C:\Users\<User>\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pyglossary\plugins\ebook_mobi\writer.py to
+_file_size_approx: int = 131072
+
+patch def nextBlock in C:\Users\<User>\AppData\Local\Packages\PythonSoftwareFoundation.Python.3.13_qbz5n2kfra8p0\LocalCache\local-packages\Python313\site-packages\pyglossary\plugins\ebook_kobo_dictfile\reader.py
+			if line.startswith("<html>"):
+				line = line[6:].replace("</html>", "")
+				html = True
+
+download and extract to data/en/pages-20250420.xml
+
+python3.13 -m wikidict en --parse
+python3.13 -m wikidict en --render
+python3.13 -m wikidict en --convert
+wsl -d Ubuntu-20.04 ../kindlegen data/en/en/output/mobi/dict-data.mobi/OEBPS/content.opf -gen_ff_mobi7 -dont_append_source -verbose
+wsl -d Ubuntu-20.04 ../kindlegen data/en/en/output2/mobi/dict-data.mobi/OEBPS/content.opf -gen_ff_mobi7 -dont_append_source -verbose
