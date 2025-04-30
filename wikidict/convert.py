@@ -99,41 +99,20 @@ WORD_TPL_DICTFILE = Template(
 {%- for variant in variants %}
 & {{ variant }}
 {%- endfor %}
-<html><ol>
+<html>
     {%- for definition in definitions -%}
         {%- if definition is string -%}
-            <li>{{ definition }}</li>
-        {%- else -%}
-            <ol style="list-style-type:lower-alpha">
-                {%- for sub_def in definition -%}
-                    {%- if sub_def is string -%}
-                        <li>{{ sub_def }}</li>
-                    {%- else -%}
-                        <ol style="list-style-type:lower-roman">
-                            {%- for sub_sub_def in sub_def -%}
-                                <li>{{ sub_sub_def }}</li>
-                            {%- endfor -%}
-                        </ol>
-                    {%- endif -%}
-                {%- endfor -%}
-            </ol>
+            ·{{ definition }}<br/>
         {%- endif -%}
     {%- endfor -%}
-</ol>
-{%- if etymologies -%}
-    {%- for etymology in etymologies -%}
-        {%- if etymology is string -%}
-            <p>{{ etymology }}</p>
-        {%- else -%}
-            <ol>
-                {%- for sub_etymology in etymology -%}
-                    <li>{{ sub_etymology }}</li>
-                {%- endfor -%}
-            </ol>
-        {%- endif -%}
-    {%- endfor -%}
-    <br/>
-{%- endif -%}</html>
+    {%- if etymologies -%}
+        {%- for etymology in etymologies -%}
+            {%- if etymology is string -%}
+                {{ etymology }}<br/>
+            {%- endif -%}
+        {%- endfor -%}
+    {%- endif -%}
+</html>
 """
 )
 
@@ -535,6 +514,7 @@ class MobiFormat(ConverterFromDictFile):
         "cover_path": str(constants.COVER_FILE),
         "keep": True,
         "kindlegen_path": str(constants.KINDLEGEN_FILE),
+        "hide_word_index": True
         # "file_size_approx": 131072
     }
 
@@ -640,7 +620,7 @@ def run_mobi_formatter(
             len(stats),
         )
         words = new_words
-        words, variants = make_words_variants(words)
+        # words, variants = make_words_variants(words)
     else:
         log.info(
             "[Mobi] Untouched words for .mobi (total words count is %s, unique characters count is %d)",
@@ -697,19 +677,30 @@ def make_variants(words: Words) -> Variants:
     return variants
 
 
+def escape_xml(text: str) -> str:
+    """Escape XML special characters."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;").replace("'", "&apos;")
+
 def make_words_variants(words: Words) -> tuple[Words, Variants]:
     log.info("Creating word and variants ...")
 
     new_words: Words = {}
     variants: Variants = defaultdict(list)
     for word, details in words.items():
-        new_words[word] = details
+        if not word in new_words:
+            new_words[word] = Word(
+                pronunciations = [f"<b>{escape_xml(word)}</b>"] + list(map(escape_xml, (details.pronunciations or []))),
+                genders = details.genders,
+                etymology = details.etymology,
+                definitions = details.definitions,
+                variants = [],
+            )
         for variant in details.variants:
             if variant in words:
                 variant_details = words[variant]
                 if len(variant_details.definitions) > 0 and len(details.definitions) == 0:
                     new_words[word] = Word(
-                        pronunciations = [variant] + (variant_details.pronunciations or []),
+                        pronunciations = [f"<b>{escape_xml(variant)}</b>"] + list(map(escape_xml, (variant_details.pronunciations or []))),
                         genders = variant_details.genders,
                         etymology = variant_details.etymology,
                         definitions = variant_details.definitions,
@@ -717,7 +708,7 @@ def make_words_variants(words: Words) -> tuple[Words, Variants]:
                     )
                 elif len(details.definitions) > 0 and len(variant_details.definitions) == 0:
                     new_words[variant] = Word(
-                        pronunciations = [word] + (details.pronunciations or []),
+                        pronunciations = [f"<b>{escape_xml(word)}</b>"] + list(map(escape_xml, (details.pronunciations or []))),
                         genders = details.genders,
                         etymology = details.etymology,
                         definitions = details.definitions,

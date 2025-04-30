@@ -208,7 +208,11 @@ def convert_gender(genders: list[str]) -> str:
 
 def convert_pronunciation(pronunciations: list[str]) -> str:
     """Return the HTML code to include for pronunciation(s) of a word."""
-    return f" {', '.join(pronunciations)}" if pronunciations else ""
+    if not pronunciations or len(pronunciations) == 0:
+        return ""
+    if len(pronunciations) == 1:
+        return f" {pronunciations[0]}<br/>"
+    return f" {pronunciations[0]} {', '.join(pronunciations[1:])}<br/>"
 
 
 def get_random_word(locale: str) -> str:
