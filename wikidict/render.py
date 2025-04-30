@@ -15,6 +15,7 @@ from itertools import chain
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING, cast
+import regex
 
 import wikitextparser as wtp
 import wikitextparser._spans
@@ -136,29 +137,29 @@ def find_section_definitions(
                 # Keep the definition ...
                 definitions.append(definition)
 
-                # ... And its eventual sub-definitions
-                subdefinitions: list[SubDefinitions] = []
-                for sublist in a_list.sublists(i=idx, pattern=lang.sublist_patterns[lang_dst]):
-                    for idx2, subcode in enumerate(sublist.items):
-                        subdefinition = utils.process_templates(word, subcode, lang_dst, all_templates=all_templates)
-                        if not subdefinition:
-                            continue
+                # # ... And its eventual sub-definitions
+                # subdefinitions: list[SubDefinitions] = []
+                # for sublist in a_list.sublists(i=idx, pattern=lang.sublist_patterns[lang_dst]):
+                #     for idx2, subcode in enumerate(sublist.items):
+                #         subdefinition = utils.process_templates(word, subcode, lang_dst, all_templates=all_templates)
+                #         if not subdefinition:
+                #             continue
 
-                        subdefinitions.append(subdefinition)
-                        subsubdefinitions: list[str] = []
-                        for subsublist in sublist.sublists(i=idx2, pattern=lang.sublist_patterns[lang_dst]):
-                            for subsubcode in subsublist.items:
-                                if subsubdefinition := utils.process_templates(
-                                    word,
-                                    subsubcode,
-                                    lang_dst,
-                                    all_templates=all_templates,
-                                ):
-                                    subsubdefinitions.append(subsubdefinition)
-                        if subsubdefinitions:
-                            subdefinitions.append(tuple(subsubdefinitions))
-                if subdefinitions:
-                    definitions.append(tuple(subdefinitions))
+                #         subdefinitions.append(subdefinition)
+                #         subsubdefinitions: list[str] = []
+                #         for subsublist in sublist.sublists(i=idx2, pattern=lang.sublist_patterns[lang_dst]):
+                #             for subsubcode in subsublist.items:
+                #                 if subsubdefinition := utils.process_templates(
+                #                     word,
+                #                     subsubcode,
+                #                     lang_dst,
+                #                     all_templates=all_templates,
+                #                 ):
+                #                     subsubdefinitions.append(subsubdefinition)
+                #         if subsubdefinitions:
+                #             subdefinitions.append(tuple(subsubdefinitions))
+                # if subdefinitions:
+                #     definitions.append(tuple(subdefinitions))
 
     return definitions
 
@@ -256,7 +257,9 @@ def _find_pronunciations(top_sections: list[wtp.Section], lang_src: str, lang_ds
     results = []
     func = lang.find_pronunciations[lang_src]
     for top_section in top_sections:
-        if result := func(top_section.contents, lang_dst):
+        contents = top_section.contents
+        contents = contents.replace("{{IPA|en|/ˈk<sup>(</sup>ʲ<sup>)</sup>a.ɾə.mɛl/|/ˈk<sup>(</sup>ʲ<sup>)</sup>æ.ɾə.mɛl/|/ˈk<sup>(</sup>ʲ<sup>)</sup>a.ɹə.mɛl/|/ˈk<sup>(</sup>ʲ<sup>)</sup>æ.ɹə.mɛl/|a=Dublin}}", "{{IPA|en|/ˈkʲa.ɾə.mɛl/|/ˈkʲæ.ɾə.mɛl/|/ˈkʲa.ɹə.mɛl/|/ˈkʲæ.ɹə.mɛl/|a=Dublin}}") # caramel
+        if result := func(contents, lang_dst):
             results.extend(result)
     return sorted(unique(results))
 
@@ -532,6 +535,8 @@ def render_word(
 ) -> Word | None:
     word, code = w
     try:
+        code = regex.sub(r"<ref [^/>]*?/>|<ref[ >](.|\r|\n)*?</ref>", "", code, flags=re.IGNORECASE)
+        code = regex.sub(r"<gallery [^/>]*?/>|<gallery[ >](.|\r|\n)*?</gallery>", "", code, flags=re.IGNORECASE)
         details = parse_word(word, code, locale, all_templates=all_templates)
     except KeyboardInterrupt:
         pass
@@ -548,21 +553,35 @@ def render_word(
     return None
 
 
-def render(in_words: dict[str, str], locale: str, workers: int) -> Words:
-    manager = multiprocessing.Manager()
-    results: Words = cast(dict[str, Word], manager.dict())
-    all_templates: list[tuple[str, str, str]] = cast(list[tuple[str, str, str]], manager.list())
+# def render(in_words: dict[str, str], locale: str, workers: int) -> Words:
+#     manager = multiprocessing.Manager()
+#     results: Words = cast(dict[str, Word], manager.dict())
+#     all_templates: list[tuple[str, str, str]] = cast(list[tuple[str, str, str]], manager.list())
 
-    with suppress(KeyboardInterrupt), multiprocessing.Pool(processes=workers) as pool:
-        pool.map(
-            partial(render_word, words=results, locale=locale, all_templates=all_templates),
-            in_words.items(),
-        )
+#     with suppress(KeyboardInterrupt), multiprocessing.Pool(processes=workers) as pool:
+#         pool.map(
+#             partial(render_word, words=results, locale=locale, all_templates=all_templates),
+#             in_words.items(),
+#         )
+
+#     utils.check_for_missing_templates(list(all_templates))
+
+#     return results.copy()
+
+def render(in_words: dict[str, str], locale: str, workers: int) -> Words:
+    results: Words = dict[str, Word]()
+    all_templates: list[tuple[str, str, str]] = list[tuple[str, str, str]]()
+
+    count = 0
+    total_count = len(in_words)
+    for word, code in sorted(in_words.items()):
+        render_word([word, code], words=results, locale=locale, all_templates=all_templates)
+        count += 1
+        print(f"\rwords:{count}/{total_count}", end="", flush=True)
 
     utils.check_for_missing_templates(list(all_templates))
 
-    return results.copy()
-
+    return results
 
 def save(output: Path, words: Words) -> None:
     """Persist data."""

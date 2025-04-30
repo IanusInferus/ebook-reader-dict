@@ -11,7 +11,7 @@ from datetime import timedelta
 from pathlib import Path
 from time import monotonic
 from typing import TYPE_CHECKING
-from xml.sax.saxutils import unescape
+import html
 
 from . import lang, utils
 
@@ -84,7 +84,7 @@ def process(file: Path, locale: str) -> dict[str, str]:
     for element in xml_iter_parse(file):
         word, code = xml_parse_element(element, head_sections_matcher)
         if word and code:
-            words[unescape(word)] = unescape(code)
+            words[html.unescape(word)] = html.unescape(code)
 
     return words
 

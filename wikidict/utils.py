@@ -9,10 +9,13 @@ from collections import defaultdict, namedtuple
 from datetime import UTC, datetime
 from functools import partial
 from typing import TYPE_CHECKING
+from typing import Iterator, Tuple, List
 
 import regex
 import requests
 import wikitextparser
+import html
+from lxml import etree
 
 from . import svg
 from .constants import (
@@ -73,6 +76,94 @@ CLOSE_DOUBLE_CURLY = "##closedoublecurly##"
 
 log = logging.getLogger(__name__)
 
+def pipe_split(s: str) -> list[str]:
+    """
+    Splits a string by '|' characters, ignoring any inside '{{...}}' templates
+    and skipping <math>...</math> blocks outside templates.
+    Raises ValueError on unmatched '{{', '}}', or unbalanced <math> tags outside templates.
+    """
+    parts = []
+    buffer = ""
+    level = 0
+    in_math = False
+    i = 0
+
+    while i < len(s):
+        if not in_math and s[i:i+5] == "<math":
+            in_math = True
+            buffer += "<math"
+            i += 5
+        elif in_math and s[i:i+7] == "</math>":
+            in_math = False
+            buffer += "</math>"
+            i += 7
+        elif not in_math and s[i:i+2] == "{{":
+            level += 1
+            buffer += "{{"
+            i += 2
+        elif not in_math and s[i:i+2] == "}}":
+            if level <= 0:
+                raise ValueError(f"Unmatched closing '}}' at position {i}")
+            level -= 1
+            buffer += "}}"
+            i += 2
+        elif not in_math and s[i] == "|" and level == 0:
+            parts.append(buffer)
+            buffer = ""
+            i += 1
+        else:
+            buffer += s[i]
+            i += 1
+
+    if level != 0:
+        raise ValueError("Unmatched opening '{{' at end of string")
+    if in_math:
+        raise ValueError("Unmatched opening '<math' at end of string")
+    parts.append(buffer)
+    return parts
+
+def find_outer_templates(s: str) -> Iterator[Tuple[str, str, List[str]]]:
+    """
+    Yields (template_text, template_name, arguments) for each outermost '{{...}}' template in the string.
+    Skips <math>...</math> blocks outside templates.
+    Raises ValueError on unmatched '{{', '}}', or unbalanced <math> tags outside templates.
+    """
+    level = 0
+    in_math = False
+    start = None
+    i = 0
+
+    while i < len(s):
+        if not in_math and s[i:i+5] == "<math":
+            in_math = True
+            i += 5
+        elif in_math and s[i:i+7] == "</math>":
+            in_math = False
+            i += 7
+        elif not in_math and s[i:i+2] == "{{":
+            if level == 0:
+                start = i
+            level += 1
+            i += 2
+        elif not in_math and s[i:i+2] == "}}":
+            if level <= 0:
+                raise ValueError(f"Unmatched closing '}}' at position {i}")
+            level -= 1
+            i += 2
+            if level == 0 and start is not None:
+                template = s[start:i]
+                # Strip outer braces and parse args
+                inner = template[2:-2]
+                args = pipe_split(inner)
+                yield (template, args[0], args[1:])
+                start = None
+        else:
+            i += 1
+
+    if level != 0:
+        raise ValueError("Unmatched opening '{{' at end of string")
+    if in_math:
+        raise ValueError("Unmatched opening '<math' at end of string")
 
 def check_for_missing_templates(all_templates: list[tuple[str, str, str]]) -> bool:
     missings_counts: dict[str, int] = defaultdict(int)
@@ -448,9 +539,9 @@ def clean(text: str) -> str:
 
     # HTML
     # Source: https://github.com/5j9/wikitextparser/blob/b24033b/wikitextparser/_wikitext.py#L83
-    text = sub2(r"'''(\0*+[^'\n]++.*?)(?:''')", "<b>\\1</b>", text)
+    text = sub2(r"'''(\0*+[^\n]++.*?)(?:''')", "<b>\\1</b>", text)
     # ''foo'' → <i>foo></i>
-    text = sub2(r"''(\0*+[^'\n]++.*?)(?:'')", "<i>\\1</i>", text)
+    text = sub2(r"''(\0*+[^\n]++.*?)(?:'')", "<i>\\1</i>", text)
     # <br> / <br /> → ''
     text = sub(r"<br[^>]+/?>", "", text)
 
@@ -467,7 +558,7 @@ def clean(text: str) -> str:
     # Internal: [[{{a|b}}]] → {{a|b}}
     text = sub(r"\[\[({{[^}]+}})\]\]", "\\1", text)
     # Internal: [[a|b]] → b
-    text = sub(r"\[\[[^|]+\|(.+?(?=\]\]))\]\]", "\\1", text)
+    text = sub(r"\[\[[^|\]]+\|(.+?(?=\]\]))\]\]", "\\1", text)
     # External: [[http://example.com Some text]] → ''
     text = sub(r"\[\[https?://[^\s]+\s[^\]]+\]\]", "", text)
     # External: [http://example.com] → ''
@@ -512,15 +603,40 @@ def clean(text: str) -> str:
     text = sub(r"<<([^/>]+)>>", "\\1", text)
     text = sub(r"<<(?:[^/>]+)/([^>]+)>>", "\\1", text)
 
-    # Convert single "< ", and " >" to HTML quotes
-    text = text.replace("< ", "&lt; ").replace(" >", " &gt;")
-
     # Restore math formulas
     for idx, formula in enumerate(formulas):
         text = text.replace(f"##math{idx}##", formula)
 
     return text.strip()
 
+def reformat_amp(text: str) -> str:
+    # First, handle text outside tags (replace & with &amp;)
+    # We split the text into parts outside and inside tags
+    parts = re.split(r'(<[^>]*>)', text)
+    for i in range(len(parts)):
+        if not parts[i].startswith('<') and not parts[i].endswith('>'):
+            parts[i] = re.sub(r'&(?![a-z]+;|#\d+;|#x[0-9a-fA-F]+;)', '&amp;', parts[i])
+        else:
+            parts[i] = parts[i].replace('&quot;', '"')
+    
+    # Rejoin the parts
+    transformed_text = ''.join(parts)
+    return transformed_text
+
+def process_entities_exclude_special_chars(text: str) -> str:
+    # Define a regex to match HTML entities
+    entity_pattern = re.compile(r'&([a-zA-Z0-9#]+);')
+
+    def replace_entity(match):
+        entity = match.group(1)
+        if entity in {'lt', 'gt', 'amp', 'quot', 'apos'}:
+            # Do not replace the special characters: <, >, &, ', "
+            return match.group(0)
+        # Convert the entity to its corresponding Unicode character
+        return html.unescape(match.group(0))
+
+    # Replace all entities in the text except for <, >, &, ', "
+    return re.sub(entity_pattern, replace_entity, text)
 
 def process_templates(
     word: str,
@@ -561,9 +677,58 @@ def process_templates(
 
     sub = re.sub
 
-    # Clean-up the code
-    if not (text := callback(wikicode)):
-        return ""
+    code = wikicode
+
+    code = code.replace("Li-Qiang Sun</sup>", "Li-Qiang Sun") # asunaprevir
+    code = code.replace("<span lang=\"en-Dsrt-US\">𐑅𐐯𐑂𐐮𐑌<span>", "<span lang=\"en-Dsrt-US\">𐑅𐐯𐑂𐐮𐑌</span>") # Deseret
+    code = code.replace("Certain [[snails]], [[slug]]s, and [[sea hare]]s}}", "Certain [[snails]], [[slug]]s, and [[sea hare]]s") # Tectipleura
+    code = code.replace("C<sub>21</sub>H<sub>30</sub>O</sub>3", "C<sub>21</sub>H<sub>30</sub>O<sub>3</sub>") # cardol
+    code = code.replace("From {{compound|en|cecropia}}</sup>", "From {{compound|en|cecropia}}") # cecropin
+    code = code.replace("An [[organic compound]] with the formula C<sub>4</sub>H<sub>6</sub>O<sub>2.", "An [[organic compound]] with the formula C<sub>4</sub>H<sub>6</sub>O<sub>2</sub>.") # cyclopropanecarboxylic acid
+    code = code.replace("C<sub><small>2</small></sub>H<sub>4</small></sub>N<sub><small>2</small></sub>O<sub><small>2</small></sub>", "C<sub><small>2</small></sub>H<sub><small>4</small></sub>N<sub><small>2</small></sub>O<sub><small>2</small></sub>") # formylurea
+    code = code.replace("[[open the attack|opens the attack]]}}", "[[open the attack|opens the attack]]") # opening
+    code = sub(r"<<([a-z]+/[A-Za-z]+)>(?!>)", r"<<\1>>", code) # Bandarban District
+    code = sub(r"<<([a-z]+:[A-Za-z]+/[A-Za-z]+)>(?!>)", r"<<\1>>", code) # Ü-Tsang
+
+    code = code.replace("<d>", "&lt;d&gt;") # -t
+    code = code.replace("</3", "&lt;/3") # </3
+    code = code.replace("<h>", "&lt;h&gt;") # authorize
+    code = code.replace("(<c>)", "(&lt;c&gt;)") # dyscravia
+    code = code.replace("(<ph>)", "(&lt;ph&gt;)") # dyscravia
+    code = code.replace("<sc->", "&lt;sc-&gt;") # sithe
+    code = code.replace("<gh>", "&lt;gh&gt;") # thruff
+    code = code.replace("<h₁>", "&lt;h₁&gt;") # trilaryngealism
+    code = code.replace("<h₂>", "&lt;h₂&gt;") # trilaryngealism
+    code = code.replace("<h₃>", "&lt;h₃&gt;") # trilaryngealism
+    code = code.replace("<ss>", "&lt;ss&gt;") # ß
+
+    code = sub(r"<nowiki>(.*?)</nowiki>", lambda m: m.group(1).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;"), code)
+    code = sub(r"<t:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<pos:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<q:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<qq:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<tr:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<text:([^>]*?)>", r" (“\1”)", code)
+    code = sub(r"<id:[^>]*?>", r"", code)
+    code = sub(r"<alt:[^>]*?>", r"", code)
+    code = sub(r'<([a-z]+) ([a-z]+)=(?!")([^>]*)>', r'<\1 \2="\3">', code)
+    code = code.replace("<br>", "<br/>")
+    code = code.replace("<poem>", "")
+    code = code.replace("</poem>", "")
+    code = code.replace("<blockquote>", "")
+    code = code.replace("</blockquote>", "")
+    code = sub(r"<div[^>]*?>", "", code)
+    code = code.replace("</div>", "")
+
+    code = reformat_amp(code)
+    code = process_entities_exclude_special_chars(code)
+    code = code.replace(" <= ", " &lt;= ")
+    code = code.replace(" >= ", " &gt;= ")
+    code = code.replace(" <=> ", " &lt;=&gt; ")
+    code = code.replace(" </ ", " &lt;/ ")
+    code = code.replace(" << ", " &lt;&lt; ")
+    code = code.replace(" >> ", " &gt;&gt; ")
+    code = code.strip()
 
     # {{foo}}
     # {{foo|bar}}
@@ -571,25 +736,43 @@ def process_templates(
     # {{foo|{{bar|baz}}|123}}
     # {{foo|{{bar|lang|{{baz|args}}}}|123}}
 
-    # Handle all templates
-    while "there are templates":
-        templates = set(re.findall(r"({{[^{}]*}})", text))
-        if not templates:
-            break
-        for tpl in templates:
+    def apply_template(text: str) -> str:
+        # Find all templates
+        templateToArgs = {tpl: (name, args) for tpl, name, args in find_outer_templates(text)}
+        if not templateToArgs:
+            return text
+
+        # Process each template
+        for tpl, (name, args) in templateToArgs.items():
             if tpl in SPECIAL_TEMPLATES:
                 text = text.replace(tpl, SPECIAL_TEMPLATES[tpl].placeholder)
-            # Transform the template
-            text = text.replace(tpl, transform(word, tpl[2:-2], locale, all_templates=all_templates))
+            else:
+                argTexts = list(map(apply_template, args))
+                transformed = transform(word, "|".join([name] + argTexts), locale, all_templates=all_templates)
+                text = text.replace(tpl, transformed)
+
+        return text
+
+    try:
+        # Clean-up the code
+        text = callback(code) or ""
+        # Handle all templates
+        text = apply_template(text)
+    except ValueError as err:
+        print(f"Error processing templates in {word!r}: {err}")
 
     for tpl in SPECIAL_TEMPLATES.values():
         text = text.replace(tpl.placeholder, tpl.value)
 
     text = text.replace(OPEN_DOUBLE_CURLY, "{{")
     text = text.replace(CLOSE_DOUBLE_CURLY, "}}")
+    text = text.replace("&nbsp;", "\u00A0")
+    text = sub(r"<(?![a-z/])", r"&lt;", text)
+    text = sub(r"(?<![a-z/\"'])>", r"&gt;", text)
 
     # Handle <chem>, <hiero>, and <math>, HTML tags
-    for tag, func in [("chem", convert_chem), ("hiero", convert_hiero), ("math", convert_math)]:
+    # for tag, func in [("chem", convert_chem), ("hiero", convert_hiero), ("math", convert_math)]:
+    for tag, func in [("chem", convert_dummy), ("hiero", convert_dummy), ("math", convert_dummy)]:
         text = sub(rf"<{tag}>(.+?)</{tag}>", partial(func, word=word), text)
         if f"<{tag}>" in text or f"</{tag}>" in text:
             raise ValueError(f"Missed <{tag}> HTML tag in {word!r}") from None
@@ -601,7 +784,17 @@ def process_templates(
     text = sub(r"\s{2,}", " ", text)
     text = sub(r"\s{1,}\.", ".", text)
 
-    return text.strip()
+    def is_well_formed_xhtml(word: str, definition: str, wikicode: str) -> bool:
+        try:
+            etree.fromstring(f"<div>{definition}</div>")
+            return True
+        except etree.XMLSyntaxError as e:
+            print(f"syntax error:\n{e}\nword: {word}\ndefinition: {definition}\ncode: {wikicode}")
+            return False
+
+    is_well_formed_xhtml(word, text, wikicode)
+
+    return text
 
 
 def render_formula(formula: str, *, cat: str = "tex", output_format: str = "svg") -> str:
@@ -678,6 +871,12 @@ def convert_math(match: str | re.Match[str], word: str) -> str:
     except Exception:
         log.exception("<math> ERROR with %r in [%s]", formula, word)
         return formula
+
+
+def convert_dummy(match: str | re.Match[str], word: str) -> str:
+    """Remove tag."""
+    expr: str = (match.group(1) if isinstance(match, re.Match) else match).strip()
+    return expr.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
 
 
 def table2html(word: str, locale: str, table: wikitextparser.Table) -> str:
@@ -757,6 +956,10 @@ def transform(word: str, template: str, locale: str, *, all_templates: list[tupl
         return MAGIC_WORDS[tpl]
     elif tpl == "PAGENAME" or (tpl == "w" and len(parts) == 1):
         return word.replace("_", " ")
+
+    # Code
+    if tpl == "code":
+        return parts[2].replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
 
     # Apply transformations
     # Note: using `is not None` below to allow templates returning an empty string.

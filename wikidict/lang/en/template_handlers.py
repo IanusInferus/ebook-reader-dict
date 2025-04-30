@@ -569,7 +569,7 @@ def render_foreign_derivation(tpl: str, parts: list[str], data: defaultdict[str,
         phrase += f" {italic(word)}"
     if data["g"]:
         phrase += f" {gender_number_specs(data['g'])}"
-    trans = "" if data["tr"] else transliterate(dst_locale, word)
+    trans = "" if data["tr"] else transliterate(dst_locale, word.replace("<b>", "").replace("</b>", "").replace("<i>", "").replace("</i>", ""))
     if parts:
         gloss = parts.pop(0)  # 5, t=, gloss=
 
@@ -1286,7 +1286,9 @@ def render_place(tpl: str, parts: list[str], data: defaultdict[str, str], *, wor
     while parts:
         si = str(i)
         part = parts.pop(0)
-        subparts = part.split("/")
+        subparts = [part]
+        if re.match(r"[a-z]+/.*", part):
+            subparts = part.split("/")
         if part in ("in", "and"):
             phrase += f" {part}"
             phrase += " " if part == "in" else ""
