@@ -12,7 +12,7 @@ float_separator = "."
 thousands_separator = ","
 
 # Markers for sections that contain interesting text to analyse.
-head_sections = ("latin")
+head_sections = ("english", "translingual")
 section_sublevels = (4, 3)
 etyl_section = ("etymology", "etymology 1", "etymology 2", "etymology 3", "etymology 4", "etymology 5")
 sections = (
